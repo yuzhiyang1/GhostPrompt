@@ -1,0 +1,16 @@
+# Rust / Cargo
+ghostprompt/src-tauri/target/
+
+# Tauri build outputs
+ghostprompt/src-tauri/WixTools/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
