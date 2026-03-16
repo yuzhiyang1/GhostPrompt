@@ -3,7 +3,8 @@
     "beforeBuildCommand": "",
     "beforeDevCommand": "",
     "devPath": "../src",
-    "distDir": "../src"
+    "distDir": "../src",
+    "withGlobalTauri": true
   },
   "tauri": {
     "allowlist": {
@@ -16,6 +17,9 @@
         "all": true
       },
       "window": {
+        "all": true
+      },
+      "process": {
         "all": true
       }
     },

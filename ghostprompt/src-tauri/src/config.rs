@@ -8,7 +8,6 @@ pub struct AppConfig {
     /// LLM API Key（适用于任意 OpenAI 兼容接口）
     pub llm_api_key: String,
     /// API Base URL，例如 https://api.openai.com/v1
-    /// 也可以填写 DeepSeek / Moonshot / 本地 Ollama 等地址
     #[serde(default = "default_llm_base_url")]
     pub llm_base_url: String,
     /// 模型名称，例如 gpt-4o-mini / deepseek-chat / qwen-plus
@@ -20,6 +19,29 @@ pub struct AppConfig {
     /// 用户自定义 System Prompt（留空时使用内置默认）
     #[serde(default)]
     pub system_prompt: String,
+    /// 音频源：microphone 或 system（系统音频/Loopback）
+    #[serde(default = "default_audio_source")]
+    pub audio_source: AudioSource,
+    /// 调试模式：显示详细日志
+    #[serde(default)]
+    pub debug_mode: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioSource {
+    Microphone,
+    System,
+}
+
+impl Default for AudioSource {
+    fn default() -> Self {
+        AudioSource::Microphone
+    }
+}
+
+fn default_audio_source() -> AudioSource {
+    AudioSource::Microphone
 }
 
 fn default_llm_base_url() -> String {
@@ -55,6 +77,8 @@ impl Default for AppConfig {
             font_size: 22,
             subtitle_position: SubtitlePosition { x: 100, y: 100 },
             system_prompt: String::new(),
+            audio_source: AudioSource::Microphone,
+            debug_mode: false,
         }
     }
 }

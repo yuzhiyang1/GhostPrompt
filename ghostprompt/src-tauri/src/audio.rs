@@ -1,4 +1,4 @@
-use crate::config::AppMode;
+use crate::config::{AppMode, AudioSource};
 use crate::llm::LLMClient;
 use crate::stt::STTClient;
 use anyhow::Result;
@@ -45,22 +45,81 @@ pub async fn start_capture_loop(
     llm_client: Arc<Mutex<LLMClient>>,
     mode: AppMode,
     system_prompt: String,
+    audio_source: AudioSource,
+    debug_mode: bool,
 ) -> Result<()> {
+    // 检查 API 配置
+    let (deepgram_key, llm_key, llm_base_url, llm_model) = {
+        let stt = stt_client.lock().unwrap();
+        let llm = llm_client.lock().unwrap();
+        (
+            stt.api_key.clone(),
+            llm.api_key.clone(),
+            llm.base_url.clone(),
+            llm.model.clone(),
+        )
+    };
+    
+    // 验证配置
+    let mut missing_configs = Vec::new();
+    if deepgram_key.is_empty() {
+        missing_configs.push("Deepgram API Key");
+    }
+    if llm_key.is_empty() {
+        missing_configs.push("LLM API Key");
+    }
+    
+    if !missing_configs.is_empty() {
+        let error_msg = format!("缺少必要配置: {}", missing_configs.join(", "));
+        app_handle.emit_all("debug_log", format!("[ERROR] {}", error_msg)).ok();
+        app_handle.emit_all("capture_error", error_msg.clone()).ok();
+        return Err(anyhow::anyhow!(error_msg));
+    }
+    
+    if debug_mode {
+        app_handle.emit_all("debug_log", "[DEBUG] API 配置检查通过").ok();
+        app_handle.emit_all("debug_log", format!("[DEBUG] LLM Base URL: {}", llm_base_url)).ok();
+        app_handle.emit_all("debug_log", format!("[DEBUG] LLM Model: {}", llm_model)).ok();
+    }
+    
     let host = cpal::default_host();
     
-    // 在 Windows 上，使用默认输出设备作为 Loopback 捕获源
-    // cpal 会将输出设备作为输入流来捕获系统音频
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| anyhow::anyhow!("No output device found"))?;
-
-    println!("Using device for loopback capture: {}", device.name()?);
-
-    // 获取设备的默认配置
-    let default_config = device.default_output_config()?;
-    println!("Default output config: {:?}", default_config);
+    // 根据音频源选择设备
+    let device = match audio_source {
+        AudioSource::Microphone => {
+            let dev = host.default_input_device()
+                .ok_or_else(|| anyhow::anyhow!("No input device found"))?;
+            if debug_mode {
+                let name = dev.name().unwrap_or_default();
+                app_handle.emit_all("debug_log", format!("[DEBUG] 使用麦克风: {}", name)).ok();
+            }
+            dev
+        }
+        AudioSource::System => {
+            // 系统音频捕获需要特殊的设备
+            // 在 Windows 上，尝试查找立体声混音设备
+            let mut found_device = None;
+            for dev in host.input_devices()? {
+                if let Ok(name) = dev.name() {
+                    let name_lower = name.to_lowercase();
+                    if name_lower.contains("stereo mix") || name_lower.contains("立体声混音") 
+                        || name_lower.contains("cable") || name_lower.contains("virtual") {
+                        found_device = Some(dev);
+                        if debug_mode {
+                            app_handle.emit_all("debug_log", format!("[DEBUG] 使用系统音频设备: {}", name)).ok();
+                        }
+                        break;
+                    }
+                }
+            }
+            found_device.ok_or_else(|| anyhow::anyhow!(
+                "未找到系统音频捕获设备。请确保已启用'立体声混音'或安装虚拟音频设备如 VB-Cable。"
+            ))?
+        }
+    };
 
     // 配置音频格式 - 使用设备支持的格式
+    let default_config = device.default_input_config()?;
     let sample_format = default_config.sample_format();
     let config = StreamConfig {
         channels: default_config.channels(),
@@ -79,7 +138,7 @@ pub async fn start_capture_loop(
 
     let is_running = Arc::new(AtomicBool::new(true));
 
-    // 设置音频捕获流 - 使用 build_input_stream 捕获输出设备的 Loopback 音频
+    // 设置音频捕获流
     let stream = match sample_format {
         SampleFormat::F32 => device.build_input_stream(
             &config,
@@ -129,7 +188,13 @@ pub async fn start_capture_loop(
         capture.is_running.store(true, Ordering::SeqCst);
     }
 
-    println!("Audio capture started (Loopback mode)");
+    let source_name = match audio_source {
+        AudioSource::Microphone => "麦克风",
+        AudioSource::System => "系统音频",
+    };
+    if debug_mode {
+        app_handle.emit_all("debug_log", format!("[DEBUG] 音频捕获已启动: {}", source_name)).ok();
+    }
 
     // 音频处理循环
     let frame_samples = SAMPLE_RATE as usize * FRAME_DURATION_MS / 1000;

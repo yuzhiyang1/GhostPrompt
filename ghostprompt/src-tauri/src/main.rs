@@ -133,9 +133,14 @@ fn start_capture(app_handle: AppHandle, state: tauri::State<AppState>) -> Result
     let audio_capture = Arc::clone(&state.audio_capture);
     let stt_client = Arc::clone(&state.stt_client);
     let llm_client = Arc::clone(&state.llm_client);
-    let (mode, system_prompt) = {
+    let (mode, system_prompt, audio_source, debug_mode) = {
         let config = state.config.lock().unwrap();
-        (config.mode.clone(), config.effective_system_prompt())
+        (
+            config.mode.clone(),
+            config.effective_system_prompt(),
+            config.audio_source.clone(),
+            config.debug_mode,
+        )
     };
     
     std::thread::spawn(move || {
@@ -148,6 +153,8 @@ fn start_capture(app_handle: AppHandle, state: tauri::State<AppState>) -> Result
                 llm_client,
                 mode,
                 system_prompt,
+                audio_source,
+                debug_mode,
             ).await {
                 eprintln!("Audio capture error: {}", e);
             }

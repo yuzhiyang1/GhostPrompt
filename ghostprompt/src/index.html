@@ -347,6 +347,61 @@
             line-height: 1.5;
         }
 
+        /* 调试日志面板 */
+        #debug-panel {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            right: 10px;
+            height: 150px;
+            background: rgba(0, 0, 0, 0.85);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-color);
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #debug-panel.visible {
+            display: flex;
+        }
+        #debug-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid var(--border-color);
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        #debug-header span {
+            flex: 1;
+        }
+        #debug-header button {
+            padding: 2px 8px;
+            font-size: 10px;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        #debug-header button:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        #debug-content {
+            flex: 1;
+            padding: 8px 10px;
+            overflow-y: auto;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 11px;
+            line-height: 1.5;
+            color: var(--text-secondary);
+        }
+        #debug-content .log-debug { color: #64D2FF; }
+        #debug-content .log-error { color: #FF453A; }
+        #debug-content .log-info { color: #30D158; }
+
         /* 面板底部操作 */
         .panel-footer {
             display: flex;
@@ -373,6 +428,9 @@
             <button class="btn btn-danger" id="btn-stop" disabled>■ 停止</button>
             <button class="btn" id="btn-settings">⚙ 设置</button>
             <button class="btn btn-ghost-toggle" id="btn-ghost" title="Ctrl+Shift+G">幽灵模式</button>
+            <button class="btn" id="btn-debug" title="显示/隐藏调试日志">🐛</button>
+            <div class="sep"></div>
+            <button class="btn" id="btn-close" title="关闭程序">✕</button>
         </div>
 
         <!-- 字幕 -->
@@ -382,6 +440,16 @@
 
         <!-- 快捷键提示 -->
         <div id="hint">Ctrl+Shift+G · 幽灵模式</div>
+
+        <!-- 调试日志面板 -->
+        <div id="debug-panel">
+            <div id="debug-header">
+                <span>调试日志</span>
+                <button id="btn-clear-debug">清空</button>
+                <button id="btn-close-debug">✕</button>
+            </div>
+            <div id="debug-content"></div>
+        </div>
     </div>
 
     <!-- 遮罩 + 设置面板 -->
@@ -397,6 +465,21 @@
                     <div class="form-group">
                         <label>Deepgram API Key</label>
                         <input type="password" id="deepgram-key" placeholder="输入 Deepgram API Key">
+                    </div>
+                    <div class="form-group">
+                        <label>音频源</label>
+                        <select id="audio-source">
+                            <option value="microphone">🎤 麦克风（你的声音）</option>
+                            <option value="system">🔊 系统音频（对方声音/视频会议）</option>
+                        </select>
+                        <div class="field-hint">选择"系统音频"可捕获视频会议中对方说话的声音。需要启用"立体声混音"或安装 VB-Cable 虚拟音频设备。</div>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="debug-mode" style="margin-right: 6px;">
+                            启用调试模式
+                        </label>
+                        <div class="field-hint">显示详细日志，帮助排查问题</div>
                     </div>
                 </div>
 
@@ -442,7 +525,21 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', async () => {
+            // 等待 Tauri API 加载
+            if (!window.__TAURI__) {
+                console.error('Tauri API not loaded');
+                alert('Tauri API 未加载，请检查应用配置');
+                return;
+            }
+            
             const { invoke } = window.__TAURI__;
+            
+            // 检查 invoke 是否可用
+            if (!invoke) {
+                console.error('Tauri invoke not available');
+                alert('Tauri invoke 不可用');
+                return;
+            }
 
             // DOM
             const app             = document.getElementById('app');
@@ -451,6 +548,8 @@
             const btnStop         = document.getElementById('btn-stop');
             const btnSettings     = document.getElementById('btn-settings');
             const btnGhost        = document.getElementById('btn-ghost');
+            const btnDebug        = document.getElementById('btn-debug');
+            const btnClose        = document.getElementById('btn-close');
             const recDot          = document.getElementById('rec-dot');
             const modalOverlay    = document.getElementById('modal-overlay');
             const btnClosePanel   = document.getElementById('btn-close-panel');
@@ -463,10 +562,35 @@
             const llmModel        = document.getElementById('llm-model');
             const appMode         = document.getElementById('app-mode');
             const systemPrompt    = document.getElementById('system-prompt');
+            const audioSource     = document.getElementById('audio-source');
+            const debugMode       = document.getElementById('debug-mode');
+
+            // 调试面板 DOM
+            const debugPanel      = document.getElementById('debug-panel');
+            const debugContent    = document.getElementById('debug-content');
+            const btnClearDebug   = document.getElementById('btn-clear-debug');
+            const btnCloseDebug   = document.getElementById('btn-close-debug');
 
             let isCapturing    = false;
             let isGhostMode    = false;
             let currentText    = '';
+            let isDebugVisible = false;
+
+            // ── 调试日志功能 ──
+            function addDebugLog(message, type = 'debug') {
+                const line = document.createElement('div');
+                line.className = `log-${type}`;
+                line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+                debugContent.appendChild(line);
+                debugContent.scrollTop = debugContent.scrollHeight;
+            }
+            function clearDebugLog() {
+                debugContent.innerHTML = '';
+            }
+            function toggleDebugPanel(show) {
+                isDebugVisible = show;
+                debugPanel.classList.toggle('visible', show);
+            }
 
             // ── 透明模式切换 ──
             function setGhostMode(val) {
@@ -487,7 +611,12 @@
                     llmModel.value     = config.llm_model || 'gpt-4o-mini';
                     appMode.value      = config.mode === 'interview' ? 'interview' : 'translate';
                     systemPrompt.value = config.system_prompt || '';
+                    audioSource.value  = config.audio_source === 'system' ? 'system' : 'microphone';
+                    debugMode.checked  = config.debug_mode || false;
                     subtitleText.style.fontSize = (config.font_size || 22) + 'px';
+                    
+                    // 如果启用了调试模式，显示调试面板
+                    toggleDebugPanel(debugMode.checked);
                 } catch (e) {
                     console.error('Failed to load config:', e);
                 }
@@ -504,9 +633,12 @@
                     font_size:        22,
                     subtitle_position: { x: 100, y: 100 },
                     system_prompt:    systemPrompt.value,
+                    audio_source:     audioSource.value,
+                    debug_mode:       debugMode.checked,
                 };
                 try {
                     await invoke('update_config', { configJson: JSON.stringify(config) });
+                    toggleDebugPanel(debugMode.checked);
                     closeSettings();
                 } catch (e) {
                     alert('保存配置失败: ' + e);
@@ -523,6 +655,7 @@
 
             // ── 开始 / 停止捕获 ──
             async function startCapture() {
+                addDebugLog('正在启动音频捕获...', 'info');
                 try {
                     await invoke('start_capture');
                     isCapturing = true;
@@ -532,8 +665,11 @@
                     recDot.classList.add('dot-record');
                     currentText = '';
                     subtitleText.textContent = '';
+                    addDebugLog('音频捕获已启动', 'info');
                 } catch (e) {
-                    alert('启动失败: ' + e);
+                    const errorMsg = '启动失败: ' + e;
+                    addDebugLog(errorMsg, 'error');
+                    alert(errorMsg);
                 }
             }
 
@@ -565,9 +701,28 @@
             btnStop.addEventListener('click', stopCapture);
             btnSettings.addEventListener('click', openSettings);
             btnGhost.addEventListener('click', toggleGhost);
+            btnDebug.addEventListener('click', () => toggleDebugPanel(!isDebugVisible));
+            btnClose.addEventListener('click', async () => {
+                try {
+                    // 先停止捕获
+                    if (isCapturing) {
+                        await stopCapture();
+                    }
+                    // 使用 Tauri API 退出程序
+                    await window.__TAURI__.process.exit(0);
+                } catch (e) {
+                    console.error('关闭程序失败:', e);
+                    // 备用方案：直接关闭窗口
+                    window.close();
+                }
+            });
             btnSave.addEventListener('click', saveConfig);
             btnCancel.addEventListener('click', closeSettings);
             btnClosePanel.addEventListener('click', closeSettings);
+
+            // 调试面板事件
+            btnClearDebug.addEventListener('click', clearDebugLog);
+            btnCloseDebug.addEventListener('click', () => toggleDebugPanel(false));
 
             // 点击遮罩关闭面板
             modalOverlay.addEventListener('click', (e) => {
@@ -582,20 +737,40 @@
             });
 
             // ── Tauri 事件 ──
+            window.__TAURI__.event.listen('capture_error', (event) => {
+                const errorMsg = event.payload;
+                addDebugLog(`[ERROR] ${errorMsg}`, 'error');
+                alert(`启动失败: ${errorMsg}\n\n请打开设置配置 API Key`);
+                // 重置按钮状态
+                isCapturing = false;
+                btnStart.disabled = false;
+                btnStop.disabled = true;
+                recDot.classList.remove('dot-record');
+                recDot.classList.add('dot-idle');
+            });
+            
             window.__TAURI__.event.listen('stt_result', (event) => {
                 console.log('STT:', event.payload);
+                if (isDebugVisible) addDebugLog(`STT: ${event.payload}`, 'info');
             });
             window.__TAURI__.event.listen('llm_start', () => {
                 currentText = '';
+                if (isDebugVisible) addDebugLog('LLM 开始生成...', 'info');
             });
             window.__TAURI__.event.listen('llm_token', (event) => {
                 currentText += event.payload;
                 subtitleText.textContent = currentText;
                 subtitleText.scrollTop = subtitleText.scrollHeight;
             });
-            window.__TAURI__.event.listen('llm_end', () => {});
+            window.__TAURI__.event.listen('llm_end', () => {
+                if (isDebugVisible) addDebugLog('LLM 生成完成', 'info');
+            });
             window.__TAURI__.event.listen('llm_error', (event) => {
                 console.error('LLM error:', event.payload);
+                if (isDebugVisible) addDebugLog(`LLM 错误: ${event.payload}`, 'error');
+            });
+            window.__TAURI__.event.listen('debug_log', (event) => {
+                if (isDebugVisible) addDebugLog(event.payload, 'debug');
             });
             window.__TAURI__.event.listen('click-through-changed', (event) => {
                 setGhostMode(event.payload);

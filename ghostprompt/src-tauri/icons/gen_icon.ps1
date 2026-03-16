@@ -1,4 +1,3 @@
-Add-Type -AssemblyName System.Drawing
 $iconDir = "d:\program\code\workSpace-rust-new\GhostPrompt\ghostprompt\src-tauri\icons"
 
 # 创建 128x128 PNG
